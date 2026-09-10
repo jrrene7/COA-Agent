@@ -4,7 +4,7 @@ A spec-driven multi-agent pipeline that researches a sales lead, crafts personal
 
 ## SDD Submission Checklist
 
-This project follows the SDD flow from the attached cheat sheet: constitution, specification, plan, tasks, implementation, tests, and validation.
+This project follows the SDD flow: constitution, specification, plan, tasks, implementation, tests, and validation.
 
 | Requirement | Location |
 |---|---|
