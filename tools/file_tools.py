@@ -3,6 +3,7 @@ import re
 from pathlib import Path
 from typing import Dict
 
+from lib.logging_config import redact_text
 from lib.tooling import tool
 
 logger = logging.getLogger(__name__)
@@ -44,5 +45,6 @@ def write_report(filename: str, content: str) -> Dict:
         logger.info("Report written: %s (%d bytes)", path, byte_count)
         return {"path": str(path), "bytes": byte_count, "status": "written"}
     except OSError as exc:
-        logger.error("write_report failed: %s", exc)
-        return {"path": "", "bytes": 0, "status": f"error: {exc}"}
+        message = redact_text(str(exc))
+        logger.error("write_report failed: %s", message)
+        return {"path": "", "bytes": 0, "status": f"error: {message}"}

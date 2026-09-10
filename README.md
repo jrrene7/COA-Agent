@@ -1,13 +1,27 @@
-# Customer Outreach Automation Agent
+# Customer Outreach Agent
 
-A multi-agent pipeline that researches a sales lead, crafts personalised outreach, and writes a structured Markdown report to disk(for now :).
+A spec-driven multi-agent pipeline that researches a sales lead, crafts personalised outreach, and writes a structured Markdown report to disk (for now). LangGraph manages the workflow state, LangChain Core provides message primitives, and application logs are redacted before emission.
+
+## SDD Submission Checklist
+
+This project follows the SDD flow from the attached cheat sheet: constitution, specification, plan, tasks, implementation, tests, and validation.
+
+| Requirement | Location |
+|---|---|
+| SDD specs | `constitution.md`, `specs/outreach-pipeline.md`, `plans/outreach-pipeline-plan.md`, `tasks/outreach-pipeline-tasks.md` |
+| README | `README.md` |
+| Unit tests | `tests/` |
+| Architecture diagram | `docs/architecture.md` |
+| Source code | `main.py`, `agents/`, `lib/`, `tools/` |
 
 ## Architecture
+
+See `docs/architecture.md` for the Mermaid architecture diagram.
 
 ```
 Lead Input (company name + URL)
          │
-    Orchestrator
+    LangGraph Orchestrator
     ┌────┴────────────────────────┐
     │                             │
 Research Agent → Marketing Agent → Sales Agent
@@ -28,18 +42,25 @@ Research Agent → Marketing Agent → Sales Agent
 
 ```
 COA-Agent/
+├── constitution.md        # Durable SDD project rules
+├── specs/                 # SDD requirements and acceptance criteria
+├── plans/                 # SDD engineering plan and traceability matrix
+├── tasks/                 # SDD executable task list
+├── docs/
+│   └── architecture.md    # Mermaid architecture diagram
 ├── agents/
 │   ├── state.py           # OutreachState TypedDict
 │   ├── research_agent.py  # ResearchAgent
 │   ├── marketing_agent.py # MarketingAgent
 │   ├── sales_agent.py     # SalesAgent
 │   ├── report_writer.py   # ReportWriter
-│   └── orchestrator.py    # Orchestrator (state machine)
+│   └── orchestrator.py    # Orchestrator (LangGraph workflow)
 ├── lib/
 │   ├── llm.py             # OpenAI wrapper with retry logic
-│   ├── messages.py        # Message dataclasses
+│   ├── messages.py        # LangChain message helpers
+│   ├── logging_config.py  # Redacted logging configuration
+│   ├── workflow.py        # Run and Snapshot result objects
 │   ├── tooling.py         # @tool decorator + Tool class
-│   ├── state_machine.py   # StateMachine, Step, EntryPoint, Termination, Run
 │   └── memory.py          # ShortTermMemory
 ├── tools/
 │   ├── web_tools.py       # web_search, scrape_website
@@ -49,6 +70,7 @@ COA-Agent/
 ├── requirements.txt
 ├── main.py                # Single-lead entry point
 ├── main_batch.py          # Batch entry point
+├── tests/                 # Offline unit tests
 └── README.md
 ```
 
@@ -105,6 +127,16 @@ python main_batch.py
 
 A `output/batch_summary.json` file is written with status for every lead.
 
+## Testing
+
+Run the offline unit tests with:
+
+```bash
+python -m unittest discover
+```
+
+The unit tests stub external API packages where needed, so they do not require OpenAI or Tavily credentials.
+
 ### Import as a library
 
 ```python
@@ -159,5 +191,7 @@ Approximately **$0.03–$0.08 per lead** with `gpt-4o-mini`. Switch to `gpt-4o` 
 - API keys are loaded from `config.env` via `python-dotenv` — never hardcoded.
 - `scrape_website` validates URL scheme (only `http`/`https`) and blocks non-web schemes.
 - `write_report` sanitises filenames and prevents path traversal.
+- `configure_logging()` redacts API keys, bearer tokens, passwords, and common secret fields.
+- Logs capture workflow events and high-level metadata, not full prompts, tool outputs, report content, or raw API responses.
 - LLM calls retry with exponential back-off on rate-limit and timeout errors.
 - All agent tool loops are capped at a maximum iteration count to prevent runaway calls.

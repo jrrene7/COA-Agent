@@ -1,15 +1,11 @@
-import logging
 import sys
 
 from agents.orchestrator import Orchestrator, OrchestratorError
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
+from lib.logging_config import configure_logging
 
 
 def main() -> None:
+    configure_logging()
     orchestrator = Orchestrator(model="gpt-4o-mini", verbose=True)
 
     try:

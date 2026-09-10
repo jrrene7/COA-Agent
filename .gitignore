@@ -5,6 +5,7 @@ config.env
 
 # Generated reports
 output/
+tmp/
 
 # Python
 __pycache__/

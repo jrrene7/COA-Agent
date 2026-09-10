@@ -9,6 +9,7 @@ import requests
 from dotenv import load_dotenv
 from tavily import TavilyClient
 
+from lib.logging_config import redact_text
 from lib.tooling import tool
 
 load_dotenv("config.env")
@@ -70,8 +71,9 @@ def web_search(query: str, max_results: int = 5) -> Dict:
             "timestamp": datetime.now().isoformat(),
         }
     except Exception as exc:
-        logger.error("web_search failed: %s", exc)
-        return {"error": str(exc), "results": [], "answer": ""}
+        message = redact_text(str(exc))
+        logger.error("web_search failed: %s", message)
+        return {"error": message, "results": [], "answer": ""}
 
 
 @tool
@@ -111,5 +113,6 @@ def scrape_website(url: str) -> Dict:
     except requests.exceptions.HTTPError as exc:
         return {"url": url, "content": "", "status": f"http error: {exc.response.status_code}"}
     except Exception as exc:
-        logger.error("scrape_website failed for %s: %s", url, exc)
-        return {"url": url, "content": "", "status": str(exc)}
+        message = redact_text(str(exc))
+        logger.error("scrape_website failed for %s: %s", url, message)
+        return {"url": url, "content": "", "status": message}

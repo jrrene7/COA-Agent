@@ -6,7 +6,7 @@ from typing import List
 from dotenv import load_dotenv
 
 from lib.llm import LLM, LLMError
-from lib.messages import SystemMessage, UserMessage, ToolMessage
+from lib.messages import SystemMessage, UserMessage, ToolMessage, get_tool_calls
 from lib.tooling import Tool
 from tools.web_tools import web_search
 from agents.state import OutreachState
@@ -78,15 +78,12 @@ class MarketingAgent:
         messages.append(ai_msg)
 
         iterations = 0
-        while ai_msg.tool_calls and iterations < _MAX_TOOL_ITERATIONS:
+        tool_calls = get_tool_calls(ai_msg)
+        while tool_calls and iterations < _MAX_TOOL_ITERATIONS:
             iterations += 1
-            for call in ai_msg.tool_calls:
-                fn_name = call.function.name
-                try:
-                    fn_args = json.loads(call.function.arguments)
-                except json.JSONDecodeError:
-                    fn_args = {}
-
+            for call in tool_calls:
+                fn_name = call.name
+                fn_args = call.arguments
                 matched = next((t for t in TOOLS if t.name == fn_name), None)
                 if matched:
                     try:
@@ -102,6 +99,13 @@ class MarketingAgent:
                     )
                 else:
                     logger.warning("MarketingAgent: unknown tool call '%s'", fn_name)
+                    messages.append(
+                        ToolMessage(
+                            content=json.dumps({"error": f"unknown tool: {fn_name}"}),
+                            tool_call_id=call.id,
+                            name=fn_name,
+                        )
+                    )
 
             try:
                 ai_msg = self.llm.invoke(messages)
@@ -109,6 +113,7 @@ class MarketingAgent:
                 raise MarketingAgentError(f"LLM call failed: {exc}") from exc
 
             messages.append(ai_msg)
+            tool_calls = get_tool_calls(ai_msg)
 
         try:
             raw = ai_msg.content or "{}"
