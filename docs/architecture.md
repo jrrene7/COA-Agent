@@ -13,7 +13,9 @@ flowchart TD
         ROUTE -->|yes| MARKETING[MarketingAgent]
         ROUTE -->|no| ABORT[[END — incomplete]]
         MARKETING --> SALES[SalesAgent]
-        SALES --> REPORT[ReportWriter]
+        SALES -->|"email subject+body?"| ROUTE2{sales_data<br/>complete?}
+        ROUTE2 -->|"no, attempts < max"| MARKETING
+        ROUTE2 -->|"yes, or attempts exhausted"| REPORT[ReportWriter]
     end
 
     MACHINE --> RESEARCH
@@ -32,6 +34,7 @@ flowchart TD
 
     LOG[Redacted Logging<br/>run_id-tagged, secrets scrubbed] --> ORCH
     LOG --> ROUTE
+    LOG --> ROUTE2
     LOG --> WEBTOOLS
     LOG --> FILETOOL
 
@@ -46,7 +49,7 @@ flowchart TD
 1. A sales operator provides a company name and optional website URL.
 2. `Orchestrator` validates the lead, mints a `run_id` (UUID4), and initializes `OutreachState` with it — every subsequent log line for the run carries that id.
 3. LangGraph runs research, then a conditional edge checks `research_data.profile` before advancing: an empty profile routes straight to `END` (`pipeline_step_incomplete`) instead of continuing into marketing/sales with unusable data.
-4. On a complete profile, marketing, sales, and report nodes run in order.
+4. On a complete profile, marketing then sales run. A second conditional edge checks the sales output (`email.subject`/`email.body`) — if either is blank, the orchestrator **loops back to `marketing_step`** for a fresh strategy and retries sales, up to `_MAX_FEEDBACK_ATTEMPTS` (2) total attempts before falling through to the report step regardless, so a persistently bad generation can't loop forever.
 5. Specialist agents build LangChain messages and call the LLM and approved tools as needed; each LLM call logs prompt/completion/total token usage.
 6. `ReportWriter` formats the completed state, redacts incidental PII (emails, phone numbers, SSN-like patterns — not decision-maker names/titles, which are the report's purpose) from the Markdown, and `write_report` writes it under `output/` with owner-only (`0600`) permissions.
 7. Redacted logging records workflow status, run id, and token usage without storing prompts, report bodies, tool payloads, or secrets.

@@ -21,14 +21,21 @@ See `docs/architecture.md` for the Mermaid architecture diagram.
 ```
 Lead Input (company name + URL)
          │
-    LangGraph Orchestrator
-    ┌────┴────────────────────────┐
-    │                             │
-Research Agent → Marketing Agent → Sales Agent
-                                       │
-                               Report Writer
-                                       │
-                              output/<slug>_lead_report.md
+    LangGraph Orchestrator (mints run_id)
+         │
+   Research Agent
+         │
+   research_data complete? ──no──> END (aborted)
+         │ yes
+   Marketing Agent ◄─────────────────┐
+         │                           │ no, attempts < max
+   Sales Agent                       │
+         │                           │
+   sales_data complete? ─────────────┘
+         │ yes (or attempts exhausted)
+   Report Writer (redacts PII)
+         │
+   output/<slug>_lead_report.md  (chmod 0600)
 ```
 
 | Agent | Responsibility | Output |
@@ -190,8 +197,11 @@ Approximately **$0.03–$0.08 per lead** with `gpt-4o-mini`. Switch to `gpt-4o` 
 
 - API keys are loaded from `config.env` via `python-dotenv` — never hardcoded.
 - `scrape_website` validates URL scheme (only `http`/`https`) and blocks non-web schemes.
-- `write_report` sanitises filenames and prevents path traversal.
+- `write_report` sanitises filenames, prevents path traversal, and `chmod`s each report `0600` (owner read/write only) since reports carry lead PII.
+- `redact_pii()` strips incidental emails, phone numbers, and SSN-like patterns out of the assembled report before it's written — decision-maker names/titles are left intact, since those are the report's purpose.
 - `configure_logging()` redacts API keys, bearer tokens, passwords, and common secret fields.
+- Every pipeline run gets a unique `run_id` (UUID4) threaded through all log lines, and each LLM call logs prompt/completion/total token usage — for traceability without recording prompt or report content.
 - Logs capture workflow events and high-level metadata, not full prompts, tool outputs, report content, or raw API responses.
 - LLM calls retry with exponential back-off on rate-limit and timeout errors.
 - All agent tool loops are capped at a maximum iteration count to prevent runaway calls.
+- The research→marketing/sales pipeline uses conditional LangGraph edges, not just straight-through steps: an incomplete research profile aborts the run, and an incomplete sales email loops back to marketing for a fresh attempt, bounded by `_MAX_FEEDBACK_ATTEMPTS` so a persistently bad generation can't loop forever.

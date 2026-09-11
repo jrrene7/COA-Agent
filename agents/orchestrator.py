@@ -26,6 +26,7 @@ class OrchestratorError(Exception):
 
 _STEP_MAX_ATTEMPTS = 3
 _STEP_RETRY_BACKOFF = 1.5
+_MAX_FEEDBACK_ATTEMPTS = 2
 
 
 def _run_with_retry(
@@ -141,7 +142,10 @@ class Orchestrator:
                 retry_on=(SalesAgentError,),
                 step_name="sales",
             )
-            result = {"sales_data": data}
+            result = {
+                "sales_data": data,
+                "feedback_attempts": state.get("feedback_attempts", 0) + 1,
+            }
             logger.info("pipeline_step_completed run_id=%s step=sales", state["run_id"])
             return result
         except SalesAgentError as exc:
@@ -175,6 +179,26 @@ class Orchestrator:
             return END
         return "marketing_step"
 
+    def _route_after_sales(self, state: OutreachState) -> str:
+        """Feedback loop: send incomplete sales output back to marketing for a
+        fresh strategy instead of shipping a report with a blank email, bounded
+        by _MAX_FEEDBACK_ATTEMPTS so a persistently bad agent can't loop forever.
+        """
+        email = (state.get("sales_data") or {}).get("email") or {}
+        subject = str(email.get("subject", "")).strip()
+        body = str(email.get("body", "")).strip()
+        attempts = state.get("feedback_attempts", 0)
+        if (not subject or not body) and attempts < _MAX_FEEDBACK_ATTEMPTS:
+            logger.warning(
+                "pipeline_feedback_loop run_id=%s step=sales attempt=%d/%d "
+                "reason=incomplete_email",
+                state["run_id"],
+                attempts,
+                _MAX_FEEDBACK_ATTEMPTS,
+            )
+            return "marketing_step"
+        return "report_step"
+
     # Graph builder
     def _build_graph(self):
         graph = StateGraph(OutreachState)
@@ -190,7 +214,11 @@ class Orchestrator:
             {"marketing_step": "marketing_step", END: END},
         )
         graph.add_edge("marketing_step", "sales_step")
-        graph.add_edge("sales_step", "report_step")
+        graph.add_conditional_edges(
+            "sales_step",
+            self._route_after_sales,
+            {"marketing_step": "marketing_step", "report_step": "report_step"},
+        )
         graph.add_edge("report_step", END)
 
         return graph.compile()
@@ -246,6 +274,7 @@ class Orchestrator:
             "marketing_data": {},
             "sales_data": {},
             "report_path": "",
+            "feedback_attempts": 0,
         }
         run = self._run_graph(initial_state)
         logger.info("pipeline_completed run_id=%s company=%s", run_id, company)

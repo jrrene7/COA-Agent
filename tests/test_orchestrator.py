@@ -176,6 +176,60 @@ class OrchestratorTests(unittest.TestCase):
         except OrchestratorError:
             self.fail("_validate_lead should not reject on content, only emptiness")
 
+    def test_sales_feedback_loop_returns_to_marketing_then_gives_up(self):
+        """An incomplete email (no subject/body) should route back to marketing
+        for a fresh strategy rather than shipping a blank report, but must stop
+        looping once _MAX_FEEDBACK_ATTEMPTS is hit instead of looping forever."""
+        events = []
+
+        class FakeResearchAgent:
+            def __init__(self, model):
+                pass
+
+            def run(self, lead):
+                return {"_company": lead["company"], "profile": "Profile"}
+
+        class FakeMarketingAgent:
+            def __init__(self, model):
+                pass
+
+            def run(self, research_data):
+                events.append("marketing")
+                return {"icp_fit": "9", "hook": "hook"}
+
+        class AlwaysBlankSalesAgent:
+            def __init__(self, model):
+                pass
+
+            def run(self, research_data, marketing_data):
+                events.append("sales")
+                return {"email": {"subject": "", "body": ""}}
+
+        class FakeReportWriter:
+            def write(self, state):
+                events.append("report")
+                return "/tmp/acme_lead_report.md"
+
+        patches = [
+            patch.object(orchestrator_module, "ResearchAgent", FakeResearchAgent),
+            patch.object(orchestrator_module, "MarketingAgent", FakeMarketingAgent),
+            patch.object(orchestrator_module, "SalesAgent", AlwaysBlankSalesAgent),
+            patch.object(orchestrator_module, "ReportWriter", FakeReportWriter),
+        ]
+
+        with patches[0], patches[1], patches[2], patches[3]:
+            run = Orchestrator(model="test-model", verbose=False).run(
+                company="Acme", url="https://acme.example"
+            )
+
+        # Bounded by _MAX_FEEDBACK_ATTEMPTS total sales attempts before the
+        # loop gives up and falls through to report_step regardless.
+        expected_cycles = orchestrator_module._MAX_FEEDBACK_ATTEMPTS
+        self.assertEqual(events.count("marketing"), expected_cycles)
+        self.assertEqual(events.count("sales"), expected_cycles)
+        self.assertEqual(events.count("report"), 1)
+        self.assertEqual(run.get_final_state()["report_path"], "/tmp/acme_lead_report.md")
+
     def test_run_executes_pipeline_steps_in_order(self):
         events = []
 
