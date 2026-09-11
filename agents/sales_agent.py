@@ -5,7 +5,10 @@ import re
 from dotenv import load_dotenv
 
 from lib.llm import LLM, LLMError
+from lib.memory import ShortTermMemory
 from lib.messages import SystemMessage, UserMessage
+from lib.security import UNTRUSTED_DATA_NOTICE, wrap_untrusted
+from lib.validation import validate_schema
 
 load_dotenv("config.env")
 
@@ -26,11 +29,22 @@ Rules:
 - Reference at least one specific fact from the research (news, product, person)
 - Never use generic openers like "I hope this finds you well"
 - Keep the call to action to one clear ask (meeting, demo, or reply)
-- Match the tone recommended by the marketing specialist"""
+- Match the tone recommended by the marketing specialist
+
+""" + UNTRUSTED_DATA_NOTICE
 
 
 class SalesAgentError(Exception):
     pass
+
+
+_SALES_SCHEMA = {
+    "email": (dict, {}),
+    "linkedin": (str, ""),
+    "followups": (list, []),
+    "objections": (list, []),
+    "next_action": (str, ""),
+}
 
 
 class SalesAgent:
@@ -56,22 +70,24 @@ class SalesAgent:
 
         company = research_data.get("_company", "the company")
 
-        messages = [
-            SystemMessage(content=SYSTEM_PROMPT),
+        memory = ShortTermMemory()
+        memory.add(SystemMessage(content=SYSTEM_PROMPT))
+        memory.add(
             UserMessage(
                 content=(
-                    f"Write personalised outreach for {company}.\n\n"
+                    f"Write personalised outreach for "
+                    f"{wrap_untrusted('research_data._company', str(company))}.\n\n"
                     f"--- Research Data ---\n"
-                    f"{json.dumps(research_data, indent=2)}\n\n"
+                    f"{wrap_untrusted('research_data', json.dumps(research_data, indent=2))}\n\n"
                     f"--- Marketing Strategy ---\n"
-                    f"{json.dumps(marketing_data, indent=2)}\n\n"
+                    f"{wrap_untrusted('marketing_data', json.dumps(marketing_data, indent=2))}\n\n"
                     f"Return only the JSON object."
                 )
-            ),
-        ]
+            )
+        )
 
         try:
-            ai_msg = self.llm.invoke(messages)
+            ai_msg = self.llm.invoke(memory.get_all())
         except LLMError as exc:
             raise SalesAgentError(f"LLM call failed: {exc}") from exc
 
@@ -83,5 +99,6 @@ class SalesAgent:
             logger.warning("SalesAgent: could not parse JSON from LLM response.")
             data = {"email": {"subject": "Follow-up", "body": ai_msg.content}}
 
+        data = validate_schema(data, _SALES_SCHEMA, SalesAgentError, "SalesAgent")
         data["_company"] = company
         return data

@@ -6,8 +6,11 @@ from typing import List
 from dotenv import load_dotenv
 
 from lib.llm import LLM, LLMError
+from lib.memory import ShortTermMemory
 from lib.messages import SystemMessage, UserMessage, ToolMessage, get_tool_calls
+from lib.security import UNTRUSTED_DATA_NOTICE, wrap_untrusted
 from lib.tooling import Tool
+from lib.validation import validate_schema
 from tools.web_tools import web_search
 from agents.state import OutreachState
 
@@ -26,11 +29,22 @@ Your output must be a JSON object with these exact keys:
   competitors — list of 2-3 competitors they likely evaluate (use web_search if unsure)
   positioning — how to position against those competitors in one sentence
 
-Base every insight on the research data provided. Be specific — generic angles are not useful."""
+Base every insight on the research data provided. Be specific — generic angles are not useful.
+
+""" + UNTRUSTED_DATA_NOTICE
 
 TOOLS: List[Tool] = [web_search]
 
 _MAX_TOOL_ITERATIONS = 5
+
+_MARKETING_SCHEMA = {
+    "icp_fit": ((str, int, float), "N/A"),
+    "value_props": (list, []),
+    "tone": (str, "N/A"),
+    "hook": (str, ""),
+    "competitors": (list, []),
+    "positioning": (str, ""),
+}
 
 
 class MarketingAgentError(Exception):
@@ -57,25 +71,27 @@ class MarketingAgent:
 
         company = research_data.get("_company", "the company")
 
-        messages = [
-            SystemMessage(content=SYSTEM_PROMPT),
+        memory = ShortTermMemory()
+        memory.add(SystemMessage(content=SYSTEM_PROMPT))
+        memory.add(
             UserMessage(
                 content=(
-                    f"Create a marketing strategy for outreach to {company}.\n\n"
+                    f"Create a marketing strategy for outreach to "
+                    f"{wrap_untrusted('research_data._company', str(company))}.\n\n"
                     f"Research intelligence:\n"
-                    f"{json.dumps(research_data, indent=2)}\n\n"
+                    f"{wrap_untrusted('research_data', json.dumps(research_data, indent=2))}\n\n"
                     f"Use web_search if you need competitor data. "
                     f"Return only the JSON object."
                 )
-            ),
-        ]
+            )
+        )
 
         try:
-            ai_msg = self.llm.invoke(messages)
+            ai_msg = self.llm.invoke(memory.get_all())
         except LLMError as exc:
             raise MarketingAgentError(f"LLM call failed: {exc}") from exc
 
-        messages.append(ai_msg)
+        memory.add(ai_msg)
 
         iterations = 0
         tool_calls = get_tool_calls(ai_msg)
@@ -90,16 +106,17 @@ class MarketingAgent:
                         result = matched(**fn_args)
                     except Exception as exc:
                         result = {"error": str(exc)}
-                    messages.append(
+                    content = wrap_untrusted(f"tool:{fn_name}", json.dumps(result))
+                    memory.add(
                         ToolMessage(
-                            content=json.dumps(result),
+                            content=content,
                             tool_call_id=call.id,
                             name=fn_name,
                         )
                     )
                 else:
                     logger.warning("MarketingAgent: unknown tool call '%s'", fn_name)
-                    messages.append(
+                    memory.add(
                         ToolMessage(
                             content=json.dumps({"error": f"unknown tool: {fn_name}"}),
                             tool_call_id=call.id,
@@ -108,11 +125,11 @@ class MarketingAgent:
                     )
 
             try:
-                ai_msg = self.llm.invoke(messages)
+                ai_msg = self.llm.invoke(memory.get_all())
             except LLMError as exc:
                 raise MarketingAgentError(f"LLM call failed: {exc}") from exc
 
-            messages.append(ai_msg)
+            memory.add(ai_msg)
             tool_calls = get_tool_calls(ai_msg)
 
         try:
@@ -123,5 +140,6 @@ class MarketingAgent:
             logger.warning("MarketingAgent: could not parse JSON from LLM response.")
             data = {"hook": ai_msg.content}
 
+        data = validate_schema(data, _MARKETING_SCHEMA, MarketingAgentError, "MarketingAgent")
         data["_company"] = company
         return data

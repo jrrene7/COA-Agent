@@ -1,9 +1,12 @@
 import logging
+import time
+from typing import Callable, Tuple, Type
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from langgraph.graph import END, START, StateGraph
 
+from lib.security import sanitize_text
 from lib.workflow import Run, Snapshot
 from agents.state import OutreachState
 from agents.research_agent import ResearchAgent, ResearchAgentError
@@ -18,6 +21,43 @@ logger = logging.getLogger(__name__)
 
 class OrchestratorError(Exception):
     pass
+
+
+_STEP_MAX_ATTEMPTS = 3
+_STEP_RETRY_BACKOFF = 1.5
+
+
+def _run_with_retry(
+    fn: Callable,
+    *args,
+    retry_on: Tuple[Type[Exception], ...],
+    step_name: str,
+    **kwargs,
+):
+    """Call `fn`, retrying with backoff if it raises one of `retry_on`.
+
+    Covers transient agent failures that aren't caught by the LLM client's own
+    retry loop — e.g. a malformed/incomplete JSON response that fails schema
+    validation but might succeed on a fresh attempt.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, _STEP_MAX_ATTEMPTS + 1):
+        try:
+            return fn(*args, **kwargs)
+        except retry_on as exc:
+            last_exc = exc
+            if attempt < _STEP_MAX_ATTEMPTS:
+                wait = _STEP_RETRY_BACKOFF ** attempt
+                logger.warning(
+                    "pipeline_step_retry step=%s attempt=%d/%d error=%s wait=%.1fs",
+                    step_name,
+                    attempt,
+                    _STEP_MAX_ATTEMPTS,
+                    exc,
+                    wait,
+                )
+                time.sleep(wait)
+    raise last_exc
 
 
 def _validate_lead(company: str, url: str) -> None:
@@ -50,7 +90,13 @@ class Orchestrator:
         if self.verbose:
             print(f"  [Research] Analysing {state['lead']['company']} …")
         try:
-            result = {"research_data": self.research.run(state["lead"])}
+            data = _run_with_retry(
+                self.research.run,
+                state["lead"],
+                retry_on=(ResearchAgentError,),
+                step_name="research",
+            )
+            result = {"research_data": data}
             logger.info("pipeline_step_completed step=research")
             return result
         except ResearchAgentError as exc:
@@ -64,7 +110,13 @@ class Orchestrator:
         if self.verbose:
             print("  [Marketing] Building messaging strategy …")
         try:
-            result = {"marketing_data": self.marketing.run(state["research_data"])}
+            data = _run_with_retry(
+                self.marketing.run,
+                state["research_data"],
+                retry_on=(MarketingAgentError,),
+                step_name="marketing",
+            )
+            result = {"marketing_data": data}
             logger.info("pipeline_step_completed step=marketing")
             return result
         except MarketingAgentError as exc:
@@ -78,12 +130,14 @@ class Orchestrator:
         if self.verbose:
             print("  [Sales] Drafting outreach content …")
         try:
-            result = {
-                "sales_data": self.sales.run(
-                    state["research_data"],
-                    state["marketing_data"],
-                )
-            }
+            data = _run_with_retry(
+                self.sales.run,
+                state["research_data"],
+                state["marketing_data"],
+                retry_on=(SalesAgentError,),
+                step_name="sales",
+            )
+            result = {"sales_data": data}
             logger.info("pipeline_step_completed step=sales")
             return result
         except SalesAgentError as exc:
@@ -156,6 +210,8 @@ class Orchestrator:
         Raises:
             OrchestratorError: on validation or pipeline failure
         """
+        company = sanitize_text(company).strip()
+        url = sanitize_text(url).strip()
         _validate_lead(company, url)
 
         logger.info("pipeline_started company=%s", company)
