@@ -14,6 +14,7 @@ class Run:
     def __init__(self, final_state: dict, snapshots: List[Snapshot]):
         self._final_state = final_state
         self.snapshots = snapshots
+        self.run_id = final_state.get("run_id", "")
 
     def get_final_state(self) -> dict:
         return dict(self._final_state)

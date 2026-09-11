@@ -103,6 +103,15 @@ class LLM:
         for attempt in range(1, _MAX_RETRIES + 1):
             try:
                 response = self.client.chat.completions.create(**kwargs)
+                usage = getattr(response, "usage", None)
+                if usage is not None:
+                    logger.info(
+                        "llm_usage model=%s prompt_tokens=%d completion_tokens=%d total_tokens=%d",
+                        self.model,
+                        usage.prompt_tokens,
+                        usage.completion_tokens,
+                        usage.total_tokens,
+                    )
                 msg = response.choices[0].message
                 return to_langchain_ai_message(
                     content=msg.content,

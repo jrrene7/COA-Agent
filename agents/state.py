@@ -2,6 +2,7 @@ from typing import TypedDict
 
 
 class OutreachState(TypedDict):
+    run_id: str           # unique id for this pipeline execution
     lead: dict           # {"company": str, "url": str}
     research_data: dict  # web intel + company profile
     marketing_data: dict # positioning + messaging angles

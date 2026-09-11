@@ -1,5 +1,7 @@
 import logging
+import os
 import re
+import stat
 from pathlib import Path
 from typing import Dict
 
@@ -41,6 +43,7 @@ def write_report(filename: str, content: str) -> Dict:
 
     try:
         path.write_text(content, encoding="utf-8")
+        os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)  # owner read/write only — report contains lead PII
         byte_count = len(content.encode("utf-8"))
         logger.info("Report written: %s (%d bytes)", path, byte_count)
         return {"path": str(path), "bytes": byte_count, "status": "written"}

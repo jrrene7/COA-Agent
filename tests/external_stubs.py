@@ -54,25 +54,34 @@ def install() -> None:
     langgraph_graph.END = "__end__"
 
     class _CompiledGraph:
-        def __init__(self, nodes, edges):
+        def __init__(self, nodes, edges, conditional_edges):
             self._nodes = nodes
             self._edges = edges
+            self._conditional_edges = conditional_edges
+
+        def _next_node(self, current, state):
+            if current in self._conditional_edges:
+                path_fn, path_map = self._conditional_edges[current]
+                key = path_fn(state)
+                return path_map.get(key, key)
+            return self._edges.get(current)
 
         def stream(self, initial_state, stream_mode="updates"):
             state = dict(initial_state)
-            current = self._edges.get(langgraph_graph.START)
+            current = self._next_node(langgraph_graph.START, state)
             while current and current != langgraph_graph.END:
                 updates = self._nodes[current](state)
                 yield {current: updates}
                 if isinstance(updates, dict):
                     state.update(updates)
-                current = self._edges.get(current)
+                current = self._next_node(current, state)
 
     class _StateGraph:
         def __init__(self, state_type):
             self.state_type = state_type
             self.nodes = {}
             self.edges = {}
+            self.conditional_edges = {}
 
         def add_node(self, name, fn):
             self.nodes[name] = fn
@@ -80,8 +89,11 @@ def install() -> None:
         def add_edge(self, from_node, to_node):
             self.edges[from_node] = to_node
 
+        def add_conditional_edges(self, from_node, path_fn, path_map=None):
+            self.conditional_edges[from_node] = (path_fn, path_map or {})
+
         def compile(self):
-            return _CompiledGraph(self.nodes, self.edges)
+            return _CompiledGraph(self.nodes, self.edges, self.conditional_edges)
 
     langgraph_graph.StateGraph = _StateGraph
     langgraph.graph = langgraph_graph

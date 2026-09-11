@@ -2,6 +2,34 @@ import re
 
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+_PHONE_RE = re.compile(
+    r"(?<!\d)(?:\+?\d{1,3}[\s.\-]?)?\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}(?!\d)"
+)
+_SSN_RE = re.compile(r"(?<!\d)\d{3}-\d{2}-\d{4}(?!\d)")
+
+_PII_PATTERNS = [
+    (_EMAIL_RE, "[REDACTED_EMAIL]"),
+    (_SSN_RE, "[REDACTED_SSN]"),
+    (_PHONE_RE, "[REDACTED_PHONE]"),
+]
+
+
+def redact_pii(value: str) -> str:
+    """Redact incidental personal contact details (emails, phone numbers, SSNs).
+
+    Applied to report content assembled from scraped web text, which can pick up
+    a stray personal email or phone number that has no business being persisted
+    to disk. Names and titles (the actual point of a lead-gen report) are left
+    untouched — this only targets direct contact identifiers.
+    """
+    if not value:
+        return value
+    redacted = value
+    for pattern, placeholder in _PII_PATTERNS:
+        redacted = pattern.sub(placeholder, redacted)
+    return redacted
+
 
 def sanitize_text(value: str) -> str:
     """Strip control characters that could be used to manipulate prompt formatting."""

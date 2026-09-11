@@ -1,5 +1,6 @@
 import logging
 import time
+import uuid
 from typing import Callable, Tuple, Type
 from urllib.parse import urlparse
 
@@ -84,7 +85,8 @@ class Orchestrator:
     # Step functions
     def _research_step(self, state: OutreachState) -> dict:
         logger.info(
-            "pipeline_step_started step=research company=%s",
+            "pipeline_step_started run_id=%s step=research company=%s",
+            state["run_id"],
             state["lead"]["company"],
         )
         if self.verbose:
@@ -97,14 +99,15 @@ class Orchestrator:
                 step_name="research",
             )
             result = {"research_data": data}
-            logger.info("pipeline_step_completed step=research")
+            logger.info("pipeline_step_completed run_id=%s step=research", state["run_id"])
             return result
         except ResearchAgentError as exc:
             raise OrchestratorError(f"Research step failed: {exc}") from exc
 
     def _marketing_step(self, state: OutreachState) -> dict:
         logger.info(
-            "pipeline_step_started step=marketing company=%s",
+            "pipeline_step_started run_id=%s step=marketing company=%s",
+            state["run_id"],
             state["lead"]["company"],
         )
         if self.verbose:
@@ -117,14 +120,15 @@ class Orchestrator:
                 step_name="marketing",
             )
             result = {"marketing_data": data}
-            logger.info("pipeline_step_completed step=marketing")
+            logger.info("pipeline_step_completed run_id=%s step=marketing", state["run_id"])
             return result
         except MarketingAgentError as exc:
             raise OrchestratorError(f"Marketing step failed: {exc}") from exc
 
     def _sales_step(self, state: OutreachState) -> dict:
         logger.info(
-            "pipeline_step_started step=sales company=%s",
+            "pipeline_step_started run_id=%s step=sales company=%s",
+            state["run_id"],
             state["lead"]["company"],
         )
         if self.verbose:
@@ -138,14 +142,15 @@ class Orchestrator:
                 step_name="sales",
             )
             result = {"sales_data": data}
-            logger.info("pipeline_step_completed step=sales")
+            logger.info("pipeline_step_completed run_id=%s step=sales", state["run_id"])
             return result
         except SalesAgentError as exc:
             raise OrchestratorError(f"Sales step failed: {exc}") from exc
 
     def _report_step(self, state: OutreachState) -> dict:
         logger.info(
-            "pipeline_step_started step=report company=%s",
+            "pipeline_step_started run_id=%s step=report company=%s",
+            state["run_id"],
             state["lead"]["company"],
         )
         if self.verbose:
@@ -153,12 +158,23 @@ class Orchestrator:
         try:
             path = self.writer.write(state)
             result = {"report_path": path}
-            logger.info("pipeline_step_completed step=report")
+            logger.info("pipeline_step_completed run_id=%s step=report", state["run_id"])
             return result
         except ReportWriterError as exc:
             raise OrchestratorError(f"Report step failed: {exc}") from exc
 
    
+    def _route_after_research(self, state: OutreachState) -> str:
+        """Only advance to marketing once research produced a usable profile."""
+        profile = (state.get("research_data") or {}).get("profile", "")
+        if not profile or not str(profile).strip():
+            logger.error(
+                "pipeline_step_incomplete run_id=%s step=research reason=empty_profile",
+                state["run_id"],
+            )
+            return END
+        return "marketing_step"
+
     # Graph builder
     def _build_graph(self):
         graph = StateGraph(OutreachState)
@@ -168,7 +184,11 @@ class Orchestrator:
         graph.add_node("report_step", self._report_step)
 
         graph.add_edge(START, "research_step")
-        graph.add_edge("research_step", "marketing_step")
+        graph.add_conditional_edges(
+            "research_step",
+            self._route_after_research,
+            {"marketing_step": "marketing_step", END: END},
+        )
         graph.add_edge("marketing_step", "sales_step")
         graph.add_edge("sales_step", "report_step")
         graph.add_edge("report_step", END)
@@ -214,11 +234,13 @@ class Orchestrator:
         url = sanitize_text(url).strip()
         _validate_lead(company, url)
 
-        logger.info("pipeline_started company=%s", company)
+        run_id = str(uuid.uuid4())
+        logger.info("pipeline_started run_id=%s company=%s", run_id, company)
         if self.verbose:
-            print(f"\n→ Starting outreach pipeline for: {company}")
+            print(f"\n→ Starting outreach pipeline for: {company} (run_id={run_id})")
 
         initial_state: OutreachState = {
+            "run_id": run_id,
             "lead": {"company": company, "url": url},
             "research_data": {},
             "marketing_data": {},
@@ -226,5 +248,5 @@ class Orchestrator:
             "report_path": "",
         }
         run = self._run_graph(initial_state)
-        logger.info("pipeline_completed company=%s", company)
+        logger.info("pipeline_completed run_id=%s company=%s", run_id, company)
         return run
