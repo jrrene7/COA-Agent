@@ -7,6 +7,9 @@ config.env
 output/
 tmp/
 
+# Durable run store — contains scraped lead data
+runs/
+
 # Python
 __pycache__/
 *.py[cod]

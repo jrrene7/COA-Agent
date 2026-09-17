@@ -57,11 +57,14 @@ class MarketingAgent:
     def __init__(self, model: str = "gpt-4o-mini", temperature: float = 0.4):
         self.llm = LLM(model=model, temperature=temperature, tools=TOOLS)
 
-    def run(self, research_data: dict) -> dict:
+    def run(self, research_data: dict, critique: str = "") -> dict:
         """Generate marketing strategy for a researched lead.
 
         Args:
             research_data (dict): output from ResearchAgent.run()
+            critique (str): evaluator feedback from a rejected draft. Present only
+                on a retry, and what makes the retry a correction rather than a
+                re-roll of the same inputs.
 
         Returns:
             dict: marketing strategy dict
@@ -71,6 +74,16 @@ class MarketingAgent:
 
         company = research_data.get("_company", "the company")
 
+        revision_note = ""
+        if critique and critique.strip():
+            revision_note = (
+                f"\nA previous strategy produced outreach that was rejected in review. "
+                f"Reviewer feedback:\n"
+                f"{wrap_untrusted('evaluator.critique', critique)}\n"
+                f"Produce a materially different strategy that addresses it. Do not "
+                f"repeat the rejected angle.\n"
+            )
+
         memory = ShortTermMemory()
         memory.add(SystemMessage(content=SYSTEM_PROMPT))
         memory.add(
@@ -79,7 +92,8 @@ class MarketingAgent:
                     f"Create a marketing strategy for outreach to "
                     f"{wrap_untrusted('research_data._company', str(company))}.\n\n"
                     f"Research intelligence:\n"
-                    f"{wrap_untrusted('research_data', json.dumps(research_data, indent=2))}\n\n"
+                    f"{wrap_untrusted('research_data', json.dumps(research_data, indent=2))}\n"
+                    f"{revision_note}\n"
                     f"Use web_search if you need competitor data. "
                     f"Return only the JSON object."
                 )

@@ -1,6 +1,11 @@
 # Customer Outreach Agent
 
-A spec-driven multi-agent pipeline that researches a sales lead, crafts personalised outreach, and writes a structured Markdown report to disk (for now). LangGraph manages the workflow state, LangChain Core provides message primitives, and application logs are redacted before emission.
+A spec-driven multi-agent system with two pipelines over a shared spine:
+
+- **Outbound** — researches a sales lead, crafts personalised outreach, scores the draft for quality and tone, and routes it to a queue or a human reviewer.
+- **Inbound** — triages a customer message for sentiment, intent and urgency, routes it to an owner, and either drafts a reply or escalates it with a handoff brief.
+
+Nothing is ever sent automatically: outbound drafts are reviewed or queued, inbound replies are drafts, and escalated messages get no draft at all. LangGraph manages workflow state, LangChain Core provides message primitives, and application logs are redacted before emission.
 
 ## SDD Submission Checklist
 
@@ -11,7 +16,9 @@ This project follows the SDD flow: constitution, specification, plan, tasks, imp
 | SDD specs | `constitution.md`, `specs/outreach-pipeline.md`, `plans/outreach-pipeline-plan.md`, `tasks/outreach-pipeline-tasks.md` |
 | README | `README.md` |
 | Unit tests | `tests/` |
+| Evaluator evals | `evals/` (`python -m evals.run`) |
 | Architecture diagram | `docs/architecture.md` |
+| Deployment strategy | `docs/deployment.md` |
 | Source code | `main.py`, `agents/`, `lib/`, `tools/` |
 
 ## Architecture
@@ -19,24 +26,54 @@ This project follows the SDD flow: constitution, specification, plan, tasks, imp
 See `docs/architecture.md` for the Mermaid architecture diagram.
 
 ```
-Lead Input (company name + URL)
-         │
-    LangGraph Orchestrator (mints run_id)
-         │
-   Research Agent
-         │
-   research_data complete? ──no──> END (aborted)
-         │ yes
-   Marketing Agent ◄─────────────────┐
-         │                           │ no, attempts < max
-   Sales Agent                       │
-         │                           │
-   sales_data complete? ─────────────┘
-         │ yes (or attempts exhausted)
-   Report Writer (redacts PII)
-         │
-   output/<slug>_lead_report.md  (chmod 0600)
+OUTBOUND                              INBOUND
+Lead (company + URL)                  Customer message
+        │                                     │
+  Research Agent                        Triage Agent
+        │                               (sentiment/intent/urgency)
+  profile complete? ──no──> END               │
+        │ yes                                 │
+  Marketing Agent ◄────────┐                  │
+        │                  │ revise           │
+  Sales Agent              │ (+critique)      │
+        │                  │                  │
+  Evaluator Agent ─────────┘                  │
+  (sentiment, scores, verdict)                │
+        │ approve / budget spent              │
+        └──────────► lib.routing ◄────────────┘
+                 (deterministic: signals → decision)
+                          │
+         ┌────────────────┴────────────────┐
+     standard / priority            human_review / escalation
+         │                                  │
+   ReportWriter / HandoffWriter (redacts PII, chmod 0600)
+                          │
+                  output/*.md
 ```
+
+Every run is persisted to a durable SQLite store keyed by `run_id`
+(`runs/runs.db`, chmod 0600) alongside per-step metrics and token/cost KPIs.
+Run `python main.py --kpis` for the aggregate summary, broken down by direction,
+queue, and sentiment.
+
+```bash
+python main.py --company "Acme" --url https://acme.example      # outbound
+python main.py --mode inbound --sender a@b.com --body -         # inbound (stdin)
+python main.py --kpis                                            # KPI summary
+
+python -m pytest                                                 # unit tests, no API calls
+python -m evals.run                                              # evaluator evals, real API calls
+```
+
+### Evaluating the evaluator
+
+The outbound quality gate is itself a model call, so `evals/` holds a corpus of
+labelled drafts — good ones, plus deliberate failure modes (generic, hallucinated
+facts, multiple CTAs, no CTA, wrong tone). `python -m evals.run` scores the real
+`EvaluatorAgent` against them and fails if it would have approved a draft a human
+labelled "review". Approving a bad draft sends a real email; over-flagging a good
+one costs a reviewer a minute, so the two are measured separately rather than
+blended into one accuracy number.
 
 | Agent | Responsibility | Output |
 |---|---|---|

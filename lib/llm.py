@@ -5,6 +5,7 @@ from typing import List, Optional
 
 from openai import OpenAI, RateLimitError, APIError, APITimeoutError
 
+from lib import kpi
 from lib.logging_config import redact_text
 from lib.messages import (
     AIMessage,
@@ -107,6 +108,12 @@ class LLM:
                 if usage is not None:
                     logger.info(
                         "llm_usage model=%s prompt_tokens=%d completion_tokens=%d total_tokens=%d",
+                        self.model,
+                        usage.prompt_tokens,
+                        usage.completion_tokens,
+                        usage.total_tokens,
+                    )
+                    kpi.record_llm_usage(
                         self.model,
                         usage.prompt_tokens,
                         usage.completion_tokens,

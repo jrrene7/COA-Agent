@@ -4,7 +4,12 @@ from tests.external_stubs import install
 
 install()
 
-from lib.security import UNTRUSTED_DATA_NOTICE, sanitize_text, wrap_untrusted
+from lib.security import (
+    UNTRUSTED_DATA_NOTICE,
+    redact_pii,
+    sanitize_text,
+    wrap_untrusted,
+)
 
 
 class SanitizeTextTests(unittest.TestCase):
@@ -36,6 +41,55 @@ class WrapUntrustedTests(unittest.TestCase):
 
     def test_notice_warns_against_following_embedded_instructions(self):
         self.assertIn("not instructions", UNTRUSTED_DATA_NOTICE)
+
+
+class RedactPiiTests(unittest.TestCase):
+    def test_redacts_email_addresses(self):
+        self.assertEqual(
+            redact_pii("Reach jane.doe+sales@acme.co.uk today"),
+            "Reach [REDACTED_EMAIL] today",
+        )
+
+    def test_redacts_ssn(self):
+        self.assertEqual(redact_pii("SSN 123-45-6789 on file"), "SSN [REDACTED_SSN] on file")
+
+    def test_redacts_common_phone_formats(self):
+        for number in (
+            "415-555-1234",
+            "415.555.1234",
+            "(415) 555-1234",
+            "(415)555-1234",
+            "+1 415-555-1234",
+            "+1-415-555-1234",
+        ):
+            with self.subTest(number=number):
+                self.assertEqual(redact_pii(f"Call {number} now"), "Call [REDACTED_PHONE] now")
+
+    def test_preserves_decision_maker_names_and_titles(self):
+        """Names and titles are the point of a lead report — only contact identifiers go."""
+        text = "Jane Doe, CEO; Bob Smith, VP Sales; Priya Patel, CTO"
+        self.assertEqual(redact_pii(text), text)
+
+    def test_does_not_redact_number_runs_in_scraped_copy(self):
+        """Regression: space-separated 3-3-4 digit runs are not phone numbers.
+
+        Marketing copy is full of certification ids, funding figures, and version
+        strings; redacting them silently corrupts the report body.
+        """
+        for text in (
+            "ISO 270 001 2013 certified",
+            "Raised Series C 150 200 3000 investors",
+            "Ports 443 100 2000 open",
+            "Version 1.2.3 build 456 789 1011",
+            "Revenue grew 200-300 4000 in 2024",
+            "fiscal 2020-2024 results",
+            "order 1234567890 shipped",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(redact_pii(text), text)
+
+    def test_handles_empty_value(self):
+        self.assertEqual(redact_pii(""), "")
 
 
 if __name__ == "__main__":

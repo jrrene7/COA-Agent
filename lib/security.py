@@ -3,8 +3,17 @@ import re
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+# Requires punctuation (dot/dash/parens/+) rather than accepting bare spaces as
+# separators. Space-delimited "270 001 2013" is indistinguishable from a phone
+# number by shape alone, and scraped marketing copy is full of such number runs —
+# redacting them corrupts the report body, which is worse here than missing a
+# space-formatted number.
 _PHONE_RE = re.compile(
-    r"(?<!\d)(?:\+?\d{1,3}[\s.\-]?)?\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}(?!\d)"
+    r"(?<![\d.\-])"
+    r"(?:\+\d{1,3}[\s.\-]?)?"            # country code only when explicitly marked with +
+    r"(?:\(\d{3}\)\s?|\d{3}(?=[.\-]))"   # area code: parenthesized, or followed by . or -
+    r"[.\-]?\d{3}[.\-]\d{4}"
+    r"(?![\d\-])"
 )
 _SSN_RE = re.compile(r"(?<!\d)\d{3}-\d{2}-\d{4}(?!\d)")
 
