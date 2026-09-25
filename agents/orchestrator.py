@@ -14,7 +14,7 @@ from lib.persistence import (
     STATUS_INCOMPLETE,
     RunStore,
 )
-from lib.routing import route_outbound
+from lib.routing import route_outbound, sla_due_at
 from lib.security import sanitize_text
 from lib.workflow import Run, Snapshot
 from agents.state import OutreachState
@@ -284,6 +284,7 @@ class Orchestrator:
             marketing_data=state.get("marketing_data") or {},
             attempts_exhausted=state.get("feedback_attempts", 0) >= _MAX_FEEDBACK_ATTEMPTS,
         )
+        due = sla_due_at(decision.priority) if decision.escalate else ""
         if decision.escalate:
             kpi.record_escalation()
             logger.warning(
@@ -298,6 +299,7 @@ class Orchestrator:
             str(evaluation.get("sentiment", "")),
             decision.priority,
             decision.owner,
+            due,
         )
         logger.info(
             "pipeline_routed run_id=%s queue=%s priority=%s owner=%s escalate=%s",

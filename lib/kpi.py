@@ -8,12 +8,21 @@ keeps agents independently testable.
 
 import contextvars
 import logging
+import os
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+
+class BudgetExceededError(Exception):
+    """Raised when a run has spent its token budget.
+
+    Deliberately not an agent error: it must not be swallowed by a step retry,
+    because retrying is exactly what would spend more.
+    """
 
 # USD per 1M tokens. Approximate and for relative tracking only — update when
 # pricing changes. Unknown models cost 0 rather than guessing.
@@ -47,6 +56,8 @@ class RunKpis:
     step_retries: int = 0
     feedback_loops: int = 0
     escalations: int = 0
+    token_budget: int = 0        # 0 disables the cap
+    sla_due_at: str = ""
     sentiment: str = ""
     queue: str = ""
     priority: str = ""
@@ -77,13 +88,26 @@ class RunKpis:
         self.escalations += 1
 
     def record_routing(
-        self, queue: str, sentiment: str = "", priority: str = "", owner: str = ""
+        self,
+        queue: str,
+        sentiment: str = "",
+        priority: str = "",
+        owner: str = "",
+        sla_due_at: str = "",
     ) -> None:
         self.queue = queue
         self.priority = priority or self.priority
         self.owner = owner or self.owner
+        self.sla_due_at = sla_due_at or self.sla_due_at
         if sentiment:
             self.sentiment = sentiment
+
+    def check_budget(self) -> None:
+        if self.token_budget and self.total_tokens >= self.token_budget:
+            raise BudgetExceededError(
+                f"run {self.run_id} spent {self.total_tokens} tokens, "
+                f"budget {self.token_budget}"
+            )
 
     def elapsed_seconds(self) -> float:
         return time.monotonic() - self.started_at
@@ -98,10 +122,12 @@ class RunKpis:
             "step_retries": self.step_retries,
             "feedback_loops": self.feedback_loops,
             "escalations": self.escalations,
+            "token_budget": self.token_budget,
             "sentiment": self.sentiment,
             "queue": self.queue,
             "priority": self.priority,
             "owner": self.owner,
+            "sla_due_at": self.sla_due_at,
         }
 
 
@@ -114,10 +140,23 @@ def current() -> Optional[RunKpis]:
     return _active.get()
 
 
+def default_token_budget() -> int:
+    """Per-run token ceiling. 0 (the default) disables the cap."""
+    try:
+        return max(0, int(os.getenv("COA_TOKEN_BUDGET", "0")))
+    except ValueError:
+        logger.warning("COA_TOKEN_BUDGET is not an integer; running uncapped.")
+        return 0
+
+
 @contextmanager
-def track_run(run_id: str, company: str = ""):
+def track_run(run_id: str, company: str = "", token_budget: int | None = None):
     """Make a fresh RunKpis the active recorder for the duration of the block."""
-    kpis = RunKpis(run_id=run_id, company=company)
+    kpis = RunKpis(
+        run_id=run_id,
+        company=company,
+        token_budget=default_token_budget() if token_budget is None else token_budget,
+    )
     token = _active.set(kpis)
     try:
         yield kpis
@@ -152,11 +191,22 @@ def record_escalation() -> None:
 
 
 def record_routing(
-    queue: str, sentiment: str = "", priority: str = "", owner: str = ""
+    queue: str,
+    sentiment: str = "",
+    priority: str = "",
+    owner: str = "",
+    sla_due_at: str = "",
 ) -> None:
     kpis = _active.get()
     if kpis is not None:
-        kpis.record_routing(queue, sentiment, priority, owner)
+        kpis.record_routing(queue, sentiment, priority, owner, sla_due_at)
+
+
+def check_budget() -> None:
+    """No-op outside an active run, so agents stay independently testable."""
+    kpis = _active.get()
+    if kpis is not None:
+        kpis.check_budget()
 
 
 def record_step_duration(step: str, seconds: float) -> None:

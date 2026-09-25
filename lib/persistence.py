@@ -53,7 +53,10 @@ CREATE TABLE IF NOT EXISTS runs (
     queue              TEXT,
     priority           TEXT,
     owner              TEXT,
-    sentiment          TEXT
+    sentiment          TEXT,
+    sla_due_at         TEXT,
+    responded_at       TEXT,
+    responded_by       TEXT
 );
 
 CREATE TABLE IF NOT EXISTS snapshots (
@@ -119,6 +122,9 @@ class RunStore:
             "priority": "TEXT",
             "owner": "TEXT",
             "sentiment": "TEXT",
+            "sla_due_at": "TEXT",
+            "responded_at": "TEXT",
+            "responded_by": "TEXT",
         }
         for column, ddl in additions.items():
             if column not in existing:
@@ -206,7 +212,8 @@ class RunStore:
                 "report_path = ?, error = ?, llm_calls = ?, prompt_tokens = ?, "
                 "completion_tokens = ?, total_tokens = ?, estimated_cost_usd = ?, "
                 "step_retries = ?, feedback_loops = ?, escalations = ?, "
-                "queue = ?, priority = ?, owner = ?, sentiment = ? WHERE run_id = ?",
+                "queue = ?, priority = ?, owner = ?, sentiment = ?, "
+                "sla_due_at = ? WHERE run_id = ?",
                 (
                     status,
                     _now(),
@@ -225,10 +232,26 @@ class RunStore:
                     totals.get("priority") or None,
                     totals.get("owner") or None,
                     totals.get("sentiment") or None,
+                    totals.get("sla_due_at") or None,
                     run_id,
                 ),
             )
             self._conn.commit()
+
+    def mark_responded(self, run_id: str, responded_by: str = "") -> bool:
+        """Record that a human actually picked the escalation up.
+
+        Returns False for an unknown run rather than silently succeeding — an
+        SLA report built on writes that went nowhere is worse than none.
+        """
+        with self._lock:
+            cursor = self._conn.execute(
+                "UPDATE runs SET responded_at = ?, responded_by = ? "
+                "WHERE run_id = ? AND responded_at IS NULL",
+                (_now(), responded_by or None, run_id),
+            )
+            self._conn.commit()
+            return cursor.rowcount > 0
 
     # Read path
     def get_run(self, run_id: str) -> Optional[dict]:
@@ -270,6 +293,16 @@ class RunStore:
         for snap in self.get_snapshots(run_id):
             state.update(snap["state"])
         return state
+
+    def open_escalations(self, limit: int = 100) -> list[dict]:
+        """Escalated runs nobody has responded to yet, most overdue first."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM runs WHERE escalations > 0 AND responded_at IS NULL "
+                "ORDER BY sla_due_at IS NULL, sla_due_at ASC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def recent_runs(self, limit: int = 20) -> list[dict]:
         with self._lock:

@@ -5,6 +5,7 @@ import sys
 from agents.inbound_orchestrator import InboundOrchestrator, InboundOrchestratorError
 from agents.orchestrator import Orchestrator, OrchestratorError
 from lib import kpi
+from lib.kpi import BudgetExceededError
 from lib.logging_config import configure_logging
 from lib.persistence import RunStore
 
@@ -21,10 +22,44 @@ def _print_kpis(store: RunStore, limit: int) -> None:
         )
 
 
+def _print_queue(store: RunStore) -> None:
+    """Escalations nobody has picked up, most overdue first."""
+    from datetime import datetime, timezone
+
+    rows = store.open_escalations()
+    if not rows:
+        print("No open escalations.")
+        return
+
+    now = datetime.now(timezone.utc)
+    print(f"{len(rows)} open escalation(s):\n")
+    for row in rows:
+        due = row["sla_due_at"]
+        marker = " "
+        when = "no SLA"
+        if due:
+            due_dt = datetime.fromisoformat(due)
+            overdue = now > due_dt
+            marker = "!" if overdue else " "
+            mins = abs(int((due_dt - now).total_seconds() // 60))
+            when = f"OVERDUE by {mins}m" if overdue else f"due in {mins}m"
+        print(
+            f" {marker} {row['direction']:<8} {(row['priority'] or '-'):<7} "
+            f"{(row['owner'] or 'unassigned'):<14} {row['company'][:26]:<26} "
+            f"{when:<16} {row['run_id']}"
+        )
+    print("\nMark one handled:  python main.py --respond <run_id> --by <name>")
+
+
 def _run_outbound(args, store: RunStore) -> None:
     orchestrator = Orchestrator(model=args.model, verbose=True, store=store)
     try:
         run = orchestrator.run(company=args.company, url=args.url)
+    except BudgetExceededError as exc:
+        print(f"\n✗ Token budget exhausted: {exc}", file=sys.stderr)
+        print("  Raise COA_TOKEN_BUDGET or investigate why this lead cost so much.",
+              file=sys.stderr)
+        sys.exit(3)
     except OrchestratorError as exc:
         print(f"\n✗ Pipeline failed: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -61,6 +96,9 @@ def _run_inbound(args, store: RunStore) -> None:
                 "channel": args.channel,
             }
         )
+    except BudgetExceededError as exc:
+        print(f"\n✗ Token budget exhausted: {exc}", file=sys.stderr)
+        sys.exit(3)
     except InboundOrchestratorError as exc:
         print(f"\n✗ Inbound pipeline failed: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -94,6 +132,11 @@ def main() -> None:
     )
     parser.add_argument("--model", default="gpt-4o-mini")
     parser.add_argument("--kpis", action="store_true", help="print KPI summary and exit")
+    parser.add_argument("--queue", action="store_true",
+                        help="list open escalations and exit")
+    parser.add_argument("--respond", metavar="RUN_ID",
+                        help="mark an escalation as handled")
+    parser.add_argument("--by", default="", help="who handled it (with --respond)")
     parser.add_argument("--limit", type=int, default=20, help="runs to include in --kpis")
 
     outbound = parser.add_argument_group("outbound")
@@ -113,6 +156,19 @@ def main() -> None:
 
     if args.kpis:
         _print_kpis(store, args.limit)
+        return
+
+    if args.queue:
+        _print_queue(store)
+        return
+
+    if args.respond:
+        if store.mark_responded(args.respond, args.by):
+            print(f"Marked {args.respond} handled"
+                  f"{' by ' + args.by if args.by else ''}.")
+        else:
+            print(f"No open escalation with run id {args.respond}.", file=sys.stderr)
+            sys.exit(1)
         return
 
     if args.mode == "inbound":

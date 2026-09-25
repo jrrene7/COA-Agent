@@ -3,6 +3,7 @@ import re
 from datetime import datetime
 
 from agents.state import InboundState
+from lib.routing import front_matter
 from lib.security import redact_pii
 from tools.file_tools import write_report
 
@@ -40,7 +41,9 @@ class HandoffWriter:
         escalated = bool(routing.get("escalate"))
         heading = "Escalation" if escalated else "Reply Draft"
 
-        md = f"""# Inbound {heading}: {sender}
+        md = f"""{front_matter(state.get("run_id", ""), "inbound", routing)}
+
+# Inbound {heading}: {sender}
 
 **Received:** {date}
 **Channel:** {message.get('channel', 'email')}

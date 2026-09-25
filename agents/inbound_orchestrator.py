@@ -12,7 +12,7 @@ from lib.persistence import (
     STATUS_FAILED,
     RunStore,
 )
-from lib.routing import route_inbound
+from lib.routing import route_inbound, sla_due_at
 from lib.security import sanitize_text
 from lib.workflow import Run, Snapshot
 from agents.state import InboundState
@@ -118,6 +118,7 @@ class InboundOrchestrator:
         decision = route_inbound(state.get("triage") or {})
         triage = state.get("triage") or {}
 
+        due = sla_due_at(decision.priority) if decision.escalate else ""
         if decision.escalate:
             kpi.record_escalation()
             logger.warning(
@@ -133,6 +134,7 @@ class InboundOrchestrator:
             str(triage.get("sentiment", "")),
             decision.priority,
             decision.owner,
+            due,
         )
         logger.info(
             "inbound_routed run_id=%s queue=%s priority=%s owner=%s escalate=%s",

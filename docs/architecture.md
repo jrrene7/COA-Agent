@@ -429,6 +429,12 @@ the gate.
 - `evals/` measures the evaluator against labelled drafts. Makes real API calls,
   so it is opt-in and deliberately outside the unit suite.
 
+Three controls back the invariant rather than merely asserting it: generated
+documents carry front matter declaring `sendable`, so an integration branches on
+a field rather than on prose; every escalation carries an owner and an SLA due
+time that `main.py --queue` reports on; and `COA_TOKEN_BUDGET` stops a run
+before the next model call rather than after it.
+
 The load-bearing invariant across all of it: **nothing is ever sent
 automatically.** Outbound drafts are queued or escalated, inbound replies are
 drafts, and escalated messages get no draft at all. Nothing in this codebase

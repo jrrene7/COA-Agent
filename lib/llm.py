@@ -91,6 +91,12 @@ class LLM:
 
         Retries up to _MAX_RETRIES times on transient API errors.
         """
+        # Checked before the call, not after: the point is to stop spending, and
+        # BudgetExceededError is deliberately not an LLMError so neither the
+        # agents' `except LLMError` nor the orchestrator's step retry swallows it
+        # and spends more.
+        kpi.check_budget()
+
         serialized = self._serialize(messages)
         kwargs: dict = {
             "model": self.model,

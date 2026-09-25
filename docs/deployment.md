@@ -80,6 +80,7 @@ Requirements:
 | `TAVILY_API_KEY` | yes | Web search; absent, `web_search` degrades to an error payload rather than crashing |
 | `OPENAI_BASE_URL` | no | Defaults to the public API; set for a proxy or gateway |
 | `COA_LOG_LEVEL` | no | Defaults to `INFO` |
+| `COA_TOKEN_BUDGET` | no | Per-run token ceiling. Unset or `0` runs uncapped; a run that hits it exits 3 |
 
 Locally these come from `config.env` (gitignored). In every deployed
 environment they must come from a secret manager — AWS Secrets Manager, GCP
@@ -141,6 +142,8 @@ aggregator and alert on these events:
 | `pipeline_feedback_loop` | evaluator gate | Rate rises sharply — usually a prompt or model regression |
 | `pipeline_escalated` | outbound routing | Rate rises — draft quality is falling |
 | `inbound_escalated` | inbound routing | **Any occurrence needs a human within SLA**, and a rate spike means something is wrong with the product, not the pipeline |
+| Overdue escalations | `main.py --queue` | Any row marked OVERDUE — nobody picked up an escalation in time |
+| Budget exhaustion | exit code 3 | Any occurrence: either a lead is pathological or the cap is too low |
 | `pipeline_step_retry` | `_run_with_retry` | Sustained increase — upstream instability or schema drift |
 | Non-zero exit | `main.py` | Any occurrence in production |
 | `estimated_cost_usd` | run store | Daily total exceeds budget |
@@ -250,22 +253,28 @@ WHERE started_at BETWEEN ? AND ?;
 
 Known gaps, roughly in priority order:
 
-1. **Nothing enforces the "draft only" guarantee outside this codebase.** The
-   pipeline never sends anything, but the reports it writes contain send-ready
-   text. Whatever consumes `output/` must respect the `escalate` flag and the
-   DRAFT marker, or the human-review gate is decorative.
-2. **No SLA tracking on escalations.** Inbound escalation records who owns a
-   message but nothing measures whether they actually responded. That is the
-   next thing to build if inbound handles real traffic.
+1. **The "draft only" guarantee is declared but not externally enforced.** Every
+   generated document now carries front matter with `sendable: true|false`, so an
+   integration can branch on one field instead of parsing prose. Nothing outside
+   this codebase is obliged to read it — whatever consumes `output/` must, or the
+   human-review gate is decorative.
+2. **Escalation SLAs are tracked but not alerted on.** Every escalation records an
+   owner and a due time, `python main.py --queue` lists what is open and overdue,
+   and `--respond` closes one. Nothing pages anybody — wire `--queue` into a
+   scheduled check.
 3. **No rate limiting across runs.** Concurrent jobs can collectively breach
    provider rate limits even though each run retries politely on its own.
-4. **No spend cap.** Nothing stops a pathological run from consuming tokens up to
-   the tool-iteration ceiling. Add a per-run token budget checked in `LLM.invoke`.
-5. **`scrape_website` has no domain allowlist or SSRF protection beyond the
-   scheme check.** It blocks non-`http(s)` URLs but will still fetch private
-   address ranges. Add an allowlist or an egress proxy before pointing it at
-   model-chosen URLs in production.
+4. **Spend cap is opt-in.** `COA_TOKEN_BUDGET` caps tokens per run and is checked
+   before each model call, but defaults to uncapped. Set it in every deployed
+   environment.
+5. **SSRF is blocked at resolution, not at connection.** Loopback, link-local,
+   private and reserved addresses are rejected, and every redirect hop is
+   re-validated. A DNS entry that changes between validation and connection
+   (rebinding) can still slip through; an egress proxy remains the stronger
+   control.
 6. **SQLite single-writer ceiling**, as above.
 7. **No PII retention policy on the run store.** Reports are PII-redacted;
    snapshots deliberately are not, so they can reconstruct a run faithfully. Set
    a retention window and prune.
+8. **Inbound has no conversation state.** Each message is triaged in isolation, so
+   a customer's third complaint reads like their first unless they say so.

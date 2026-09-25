@@ -136,6 +136,56 @@ class RouteInboundTests(unittest.TestCase):
             set(as_dict), {"queue", "priority", "owner", "escalate", "reason"}
         )
 
+class SendableTests(unittest.TestCase):
+    """The single field an integration should branch on."""
+
+    def test_approved_routing_is_sendable(self):
+        decision = route_outbound({"overall": 9, "verdict": "approve"})
+        self.assertTrue(routing.sendable(decision.to_dict()))
+
+    def test_escalated_routing_is_not_sendable(self):
+        decision = route_outbound({"overall": 2, "verdict": "revise"})
+        self.assertFalse(routing.sendable(decision.to_dict()))
+
+    def test_missing_routing_is_not_sendable(self):
+        """Never reviewed is not the same as approved — fail closed."""
+        self.assertFalse(routing.sendable({}))
+        self.assertFalse(routing.sendable(None))
+
+    def test_routing_without_an_escalate_key_fails_closed(self):
+        self.assertFalse(routing.sendable({"queue": "standard"}))
+
+
+class FrontMatterTests(unittest.TestCase):
+    def test_declares_sendable_false_when_escalated(self):
+        decision = route_outbound({"overall": 3, "verdict": "revise"})
+        fm = routing.front_matter("run-1", "outbound", decision.to_dict(), 3)
+
+        self.assertIn("sendable: false", fm)
+        self.assertIn("escalate: true", fm)
+        self.assertIn("queue: human_review", fm)
+        self.assertIn("quality_score: 3", fm)
+
+    def test_declares_sendable_true_when_approved(self):
+        decision = route_outbound({"overall": 9, "verdict": "approve"})
+        fm = routing.front_matter("run-1", "outbound", decision.to_dict(), 9)
+
+        self.assertIn("sendable: true", fm)
+        self.assertIn("escalate: false", fm)
+
+    def test_is_delimited_yaml_front_matter(self):
+        fm = routing.front_matter("run-1", "inbound", {})
+        lines = fm.splitlines()
+        self.assertEqual(lines[0], "---")
+        self.assertEqual(lines[-1], "---")
+        self.assertIn("direction: inbound", fm)
+
+    def test_empty_routing_fails_closed(self):
+        self.assertIn("sendable: false", routing.front_matter("run-1", "inbound", {}))
+
+    def test_quality_score_omitted_when_absent(self):
+        self.assertNotIn("quality_score", routing.front_matter("run-1", "inbound", {}))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -19,3 +19,22 @@ Tasks are intentionally small, testable, ordered, and traceable to the specifica
 - T-11 Add integration tests with mocked OpenAI and Tavily client responses.
 - T-12 Add a FastAPI wrapper if the project needs a web submission path.
 - T-13 Add email or CRM integrations only after updating the spec and plan.
+
+## Follow-on tasks (2026-09)
+
+| Task | Requirement | Status | Verification |
+|---|---|---|---|
+| T-20 Add evaluator agent and quality gate | R-20, R-23 | Done | `tests/test_evaluator_agent.py` |
+| T-21 Carry critique into the marketing retry | R-21 | Done | `tests/test_orchestrator.py::test_evaluator_critique_reaches_the_marketing_retry` |
+| T-22 Add deterministic routing layer | R-22, R-24 | Done | `tests/test_routing.py` |
+| T-23 Add inbound triage pipeline | R-24, R-25 | Done | `tests/test_inbound_orchestrator.py` |
+| T-24 Add machine-readable front matter | R-26 | Done | `tests/test_routing.py::FrontMatterTests` |
+| T-25 Add durable run store keyed by run_id | R-27 | Done | `tests/test_persistence.py` |
+| T-26 Add SLA tracking on escalations | R-28 | Done | `tests/test_persistence.py::SlaTrackingTests` |
+| T-27 Add per-run token budget | R-29 | Done | `tests/test_kpi.py::TokenBudgetTests` |
+| T-28 Add SSRF protection to scraping | R-30 | Done | `tests/test_web_tools.py::SsrfTests` |
+| T-29 Add evaluator eval corpus and harness | R-31 | Done | `tests/test_evals.py`; live run via `python -m evals.run` |
+| T-30 Calibrate approve/escalate thresholds against the real model | R-31 | **Blocked** | Needs `OPENAI_API_KEY` and a spend allowance |
+| T-31 Add inbound conversation/thread state | — | Open | Not started; each message is triaged in isolation |
+| T-32 Replace SQLite when parallel workers are needed | — | Deferred | Documented constraint in `docs/deployment.md` |
+

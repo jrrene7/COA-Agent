@@ -2,12 +2,14 @@ import os
 import stat
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from tests.external_stubs import install
 
 install()
 
+from lib.routing import sla_due_at
 from lib.persistence import (
     STATUS_COMPLETED,
     STATUS_FAILED,
@@ -130,6 +132,80 @@ class RunStoreTests(unittest.TestCase):
         with RunStore(db) as second:
             self.assertEqual(second.get_run("run-1")["company"], "Acme")
             self.assertEqual(second.reconstruct_state("run-1")["research_data"]["profile"], "A")
+
+class SlaTrackingTests(unittest.TestCase):
+    """Recording who owns an escalation is only half of it — whether they
+    actually responded is the half that makes the number mean anything."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.store = RunStore(Path(self._tmp.name) / "runs.db")
+        self.addCleanup(self.store.close)
+
+    def _escalated(self, run_id, company="Acme", due=None, priority="urgent"):
+        self.store.start_run(run_id, company)
+        self.store.finish_run(
+            run_id,
+            status=STATUS_COMPLETED,
+            totals={
+                "escalations": 1,
+                "queue": "escalation",
+                "priority": priority,
+                "owner": "support_lead",
+                "sla_due_at": due or sla_due_at(priority),
+            },
+        )
+
+    def test_open_escalations_lists_unanswered_only(self):
+        self._escalated("run-1")
+        self.store.start_run("run-2", "Calm Co")
+        self.store.finish_run("run-2", status=STATUS_COMPLETED, totals={"escalations": 0})
+
+        open_ids = [r["run_id"] for r in self.store.open_escalations()]
+        self.assertEqual(open_ids, ["run-1"])
+
+    def test_marking_responded_closes_it(self):
+        self._escalated("run-1")
+        self.assertTrue(self.store.mark_responded("run-1", "dana"))
+        self.assertEqual(self.store.open_escalations(), [])
+        self.assertEqual(self.store.get_run("run-1")["responded_by"], "dana")
+
+    def test_marking_responded_twice_reports_no_change(self):
+        """The second call must not overwrite the original response time."""
+        self._escalated("run-1")
+        self.store.mark_responded("run-1", "dana")
+        first = self.store.get_run("run-1")["responded_at"]
+
+        self.assertFalse(self.store.mark_responded("run-1", "someone-else"))
+        self.assertEqual(self.store.get_run("run-1")["responded_at"], first)
+        self.assertEqual(self.store.get_run("run-1")["responded_by"], "dana")
+
+    def test_unknown_run_reports_no_change_rather_than_silently_succeeding(self):
+        self.assertFalse(self.store.mark_responded("does-not-exist"))
+
+    def test_open_escalations_are_ordered_most_overdue_first(self):
+        past = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        soon = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+        self._escalated("run-soon", "Later Co", due=soon)
+        self._escalated("run-past", "Overdue Co", due=past)
+
+        self.assertEqual(
+            [r["run_id"] for r in self.store.open_escalations()],
+            ["run-past", "run-soon"],
+        )
+
+
+class SlaTargetTests(unittest.TestCase):
+    def test_urgent_has_the_tightest_target(self):
+        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        urgent = datetime.fromisoformat(sla_due_at("urgent", now))
+        normal = datetime.fromisoformat(sla_due_at("normal", now))
+        self.assertLess(urgent, normal)
+
+    def test_unknown_priority_falls_back_to_normal(self):
+        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        self.assertEqual(sla_due_at("whatever", now), sla_due_at("normal", now))
 
 
 if __name__ == "__main__":

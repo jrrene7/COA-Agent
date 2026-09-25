@@ -3,6 +3,7 @@ import re
 from datetime import datetime
 
 from agents.state import OutreachState
+from lib.routing import front_matter
 from lib.security import redact_pii
 from tools.file_tools import write_report
 
@@ -41,7 +42,11 @@ class ReportWriter:
         subject = email.get("subject", "")
         body = email.get("body", "")
 
-        md = f"""# Lead Report: {company}
+        md = f"""{front_matter(
+            state.get("run_id", ""), "outbound", routing, evaluation.get("overall")
+        )}
+
+# Lead Report: {company}
 
 {_status_banner(routing, evaluation)}
 

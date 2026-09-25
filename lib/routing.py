@@ -8,6 +8,7 @@ testable. Every decision carries the reason that produced it.
 """
 
 from dataclasses import dataclass, asdict
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 # Queues
@@ -61,6 +62,22 @@ _QUEUE_OWNERS = {
     QUEUE_HUMAN_REVIEW: "sales_manager",
     QUEUE_ESCALATION: "support_lead",
 }
+
+# How long a human has to pick up an escalation, by priority.
+SLA_MINUTES = {
+    PRIORITY_URGENT: 30,
+    PRIORITY_HIGH: 4 * 60,
+    PRIORITY_NORMAL: 24 * 60,
+    PRIORITY_LOW: 48 * 60,
+}
+
+
+def sla_due_at(priority: str, now: Optional[datetime] = None) -> str:
+    """When an escalation at this priority becomes overdue, as an ISO timestamp."""
+    minutes = SLA_MINUTES.get(normalize_priority(priority), SLA_MINUTES[PRIORITY_NORMAL])
+    start = now or datetime.now(timezone.utc)
+    return (start + timedelta(minutes=minutes)).isoformat()
+
 
 # Outbound drafts scoring at or above this are safe to send unreviewed.
 OUTBOUND_APPROVE_THRESHOLD = 7.0
@@ -254,3 +271,40 @@ def route_inbound(triage: dict) -> RoutingDecision:
         escalate=False,
         reason=f"routine message (sentiment={sentiment}, intent={intent})",
     )
+
+
+def sendable(routing: dict) -> bool:
+    """Whether a consumer may send this without a human first.
+
+    The single field an integration should branch on. Absent routing means the
+    item was never reviewed, which is not the same as approved.
+    """
+    if not routing:
+        return False
+    return not routing.get("escalate", True)
+
+
+def front_matter(run_id: str, direction: str, routing: dict, quality_score=None) -> str:
+    """Machine-readable header for a generated document.
+
+    The prose banner tells a human; this tells a pipeline. Without it, honouring
+    the review gate means parsing English out of a Markdown body, which no
+    integration will do reliably.
+    """
+    routing = routing or {}
+    ok = sendable(routing)
+    lines = [
+        "---",
+        f"run_id: {run_id}",
+        f"direction: {direction}",
+        f"sendable: {'true' if ok else 'false'}",
+        f"escalate: {'true' if routing.get('escalate') else 'false'}",
+        f"queue: {routing.get('queue', 'unassigned')}",
+        f"priority: {routing.get('priority', 'normal')}",
+        f"owner: {routing.get('owner', 'unassigned')}",
+    ]
+    if quality_score is not None:
+        lines.append(f"quality_score: {quality_score}")
+    lines.append(f"generated_by: coa-agent")
+    lines.append("---")
+    return "\n".join(lines)

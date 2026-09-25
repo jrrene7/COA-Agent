@@ -1,4 +1,6 @@
+import os
 import unittest
+from unittest.mock import patch
 
 from tests.external_stubs import install
 
@@ -109,6 +111,46 @@ class SummarizeTests(unittest.TestCase):
         self.assertEqual(summary["total_tokens"], 0)
         self.assertEqual(summary["success_rate"], 1.0)
 
+
+
+class TokenBudgetTests(unittest.TestCase):
+    """A pathological run must not spend up to the tool-iteration ceiling."""
+
+    def test_uncapped_by_default(self):
+        with kpi.track_run("run-1") as kpis:
+            kpi.record_llm_usage("gpt-4o-mini", 10_000_000, 10_000_000, 20_000_000)
+            kpi.check_budget()  # must not raise
+        self.assertEqual(kpis.token_budget, 0)
+
+    def test_budget_stops_the_run_once_spent(self):
+        with self.assertRaises(kpi.BudgetExceededError):
+            with kpi.track_run("run-1", token_budget=1000):
+                kpi.record_llm_usage("gpt-4o-mini", 600, 500, 1100)
+                kpi.check_budget()
+
+    def test_budget_allows_calls_below_the_ceiling(self):
+        with kpi.track_run("run-1", token_budget=1000):
+            kpi.record_llm_usage("gpt-4o-mini", 100, 50, 150)
+            kpi.check_budget()  # must not raise
+
+    def test_budget_error_is_not_an_llm_error(self):
+        """It must escape `except LLMError` and the step retry, or retrying
+        would spend more of a budget that is already gone."""
+        from lib.llm import LLMError
+
+        self.assertFalse(issubclass(kpi.BudgetExceededError, LLMError))
+
+    def test_check_budget_is_a_noop_outside_a_run(self):
+        self.assertIsNone(kpi.current())
+        kpi.check_budget()
+
+    def test_budget_read_from_environment(self):
+        with patch.dict(os.environ, {"COA_TOKEN_BUDGET": "5000"}):
+            self.assertEqual(kpi.default_token_budget(), 5000)
+
+    def test_malformed_budget_env_runs_uncapped_rather_than_crashing(self):
+        with patch.dict(os.environ, {"COA_TOKEN_BUDGET": "not-a-number"}):
+            self.assertEqual(kpi.default_token_budget(), 0)
 
 if __name__ == "__main__":
     unittest.main()

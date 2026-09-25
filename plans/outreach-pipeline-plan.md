@@ -1,11 +1,20 @@
 # Outreach Pipeline Plan
 
 ## Architecture
-The system uses a sequential LangGraph `StateGraph` architecture.
+The system uses two LangGraph `StateGraph` pipelines over a shared routing layer.
 
-- `main.py` handles single-lead command-line execution.
-- `agents/orchestrator.py` validates leads, owns specialist agent instances, and wires the LangGraph workflow.
-- `agents/*_agent.py` modules perform research, marketing, and sales specialist work.
+- `main.py` handles command-line execution for both directions, plus KPI and escalation-queue views.
+- `agents/orchestrator.py` validates leads, owns outbound specialist instances, and wires the outbound workflow: research → marketing → sales → evaluate → route → report.
+- `agents/inbound_orchestrator.py` wires the inbound workflow: triage → route → (reply | handoff) → write.
+- `agents/*_agent.py` modules perform specialist work; each is pure and unaware of the graph.
+- `lib/routing.py` converts agent signals into a queue, priority, owner, and escalate flag. Deterministic by design.
+- `lib/persistence.py` stores every run durably by `run_id`; `lib/kpi.py` accumulates per-run metrics through a ContextVar.
+- `evals/` measures the outbound quality gate against a labelled corpus.
+
+## Gates
+- After research: an empty profile ends the run rather than feeding unusable data downstream.
+- After evaluation: a `revise` verdict loops back to marketing carrying the critique, bounded by `_MAX_FEEDBACK_ATTEMPTS`. A draft below the approve threshold is routed to a human instead of being presented as sendable.
+- After inbound triage: escalated messages skip reply drafting entirely.
 - `agents/report_writer.py` formats completed state into Markdown.
 - `lib/workflow.py` provides lightweight run and snapshot result objects for callers.
 - `lib/messages.py` exposes LangChain message primitives and normalizes tool calls.
